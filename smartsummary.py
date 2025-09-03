@@ -33,13 +33,17 @@ import html
 from typing import Dict, List, Any
 import requests
 
+# Add dotenv support
+from dotenv import load_dotenv
+load_dotenv()
+
 # --- Configuration ---
 MENDIX_PAT = os.getenv("MENDIX_PAT", "").strip()
 APP_ID = os.getenv("MENDIX_APP_ID", "").strip()
 
 # Base endpoint: set this to the server shown in the Epics API docs/OAS.
 # Example placeholder; override with EPICS_API_BASE if your tenant/doc shows a different host.
-EPICS_API_BASE = os.getenv("EPICS_API_BASE", "https://epics.api.mendix.com").rstrip("/")
+EPICS_API_BASE = os.getenv("EPICS_API_BASE", "https://epics.api.mendix.com/v1").rstrip("/")
 
 PRICE_PER_POINT = float(os.getenv("PRICE_PER_POINT", "55.00"))
 CURRENCY_SYMBOL = os.getenv("CURRENCY_SYMBOL", "$")
@@ -117,96 +121,65 @@ def is_completed_status(status_obj: Dict[str, Any]) -> bool:
                 return True
     # Try category if present
     cat = (status_obj.get("category") or "").strip().lower()
-    if cat in {"done", "completed", "closed", "resolved"}:
+    if cat in {"Done"}:
         return True
     return False
 
 def extract_points(story: Dict[str, Any]) -> float:
     """
-    Stories may expose points under different keys. Try a few.
+    Extract story points using OpenAPI spec key.
     """
-    for key in ("points", "storyPoints", "story_points", "estimate", "estimationPoints"):
-        val = story.get(key)
-        if isinstance(val, (int, float)):
-            return float(val)
-        # Sometimes nested: { "estimate": { "points": 3 } }
-        if isinstance(val, dict):
-            for k2 in ("points", "value", "amount"):
-                if isinstance(val.get(k2), (int, float)):
-                    return float(val[k2])
+    val = story.get("storyPoints")
+    if isinstance(val, (int, float)):
+        return float(val)
     return 0.0
 
-def extract_status_id(story: Dict[str, Any]) -> str:
-    for key in ("statusId", "status_id", "status", "statusUUID"):
-        val = story.get(key)
-        if isinstance(val, str):
-            return val
-        if isinstance(val, dict):
-            # e.g., "status": { "id": "...", "name": "Done" }
-            for k2 in ("id", "statusId", "uuid", "key"):
-                if isinstance(val.get(k2), str):
-                    return val[k2]
-    return ""
-
 def extract_title(story: Dict[str, Any]) -> str:
-    for key in ("title", "name", "summary"):
-        if story.get(key):
-            return str(story[key]).strip()
-    # fallback
-    return f"Story {story.get('id') or story.get('storyId') or story.get('uuid') or ''}".strip()
+    """
+    Extract story title using OpenAPI spec key.
+    """
+    return str(story.get("title", "")).strip()
+
+def extract_description(story: Dict[str, Any]) -> str:
+    """
+    Extract story description using OpenAPI spec key.
+    """
+    return str(story.get("descriptionPlain", "")).strip()
+
+def extract_status(story: Dict[str, Any]) -> str:
+    """
+    Extract story status using OpenAPI spec key.
+    """
+    return str(story.get("status", "")).strip()
 
 def iterate_all_stories() -> List[Dict[str, Any]]:
     """
     Pull stories with naive pagination.
-    The Epics API may return HAL/links; follow `links.next` if present.
-    Otherwise, use page/limit if supported (you can adapt as needed).
     """
     all_items: List[Dict[str, Any]] = []
-
-    # First attempt: simple GET with a large page size; adjust if needed.
-    params = {"limit": 200}
-    data = epics_get(f"/projects/{APP_ID}/stories", params=params)
-
-    def normalize_items(payload):
-        # Response could be { "stories": [ ... ], "links": {...} } or direct array
-        if isinstance(payload, dict):
-            arr = payload.get("stories")
-            if isinstance(arr, list):
-                return arr
-            # sometimes "items"
-            arr2 = payload.get("items")
-            if isinstance(arr2, list):
-                return arr2
-        elif isinstance(payload, list):
-            return payload
-        return []
-
-    def get_next_link(payload) -> str:
-        if isinstance(payload, dict):
-            links = payload.get("links") or payload.get("_links") or {}
-            for key in ("next", "Next", "NEXT"):
-                nxt = links.get(key)
-                if isinstance(nxt, dict) and nxt.get("href"):
-                    href = nxt["href"]
-                    # If relative, prefix base
-                    if href.startswith("http"):
-                        return href
-                    return f"{EPICS_API_BASE}{href}"
-                if isinstance(nxt, str):
-                    return nxt
-        return ""
-
-    items = normalize_items(data)
-    all_items.extend(items)
-
-    next_url = get_next_link(data)
-    while next_url:
-        r = requests.get(next_url, headers=auth_headers(), timeout=60)
-        r.raise_for_status()
-        data = r.json()
-        items = normalize_items(data)
+    params = {"limit": 100, "offset": 0}
+    while True:
+        data = epics_get(f"/projects/{APP_ID}/stories", params=params)
+        # Mendix Epics API always returns a dict with 'stories' key
+        items = data.get("stories", [])
         all_items.extend(items)
-        next_url = get_next_link(data)
+
+        # Pagination: look for 'links' array with rel: next
+        next_offset = None
+        links = data.get("links", [])
+        for link in links:
+            if link.get("rel") == "next" and link.get("hRef"):
+                # Extract offset from hRef if present
+                import re
+                m = re.search(r"offset=(\d+)", link["hRef"])
+                if m:
+                    next_offset = int(m.group(1))
+                break
+
+        if next_offset is not None and next_offset != params["offset"]:
+            params["offset"] = next_offset
+        else:
+            break
 
     return all_items
 
@@ -220,13 +193,18 @@ def build_email_lines(completed_stories: List[Dict[str, Any]]) -> (str, str, flo
     total = 0.0
     for st in completed_stories:
         title = extract_title(st)
+        desc = extract_description(st)
         pts = extract_points(st)
         price = pts * PRICE_PER_POINT
         total += price
 
         price_str = brl_like_currency(price, CURRENCY_SYMBOL)
-        lines_txt.append(f"- {title} - {price_str}")
-        lines_html.append(f"<li><span>{html.escape(title)}</span> - <strong>{html.escape(price_str)}</strong></li>")
+        lines_txt.append(f"- {title}\n  {desc}\n  {pts} story point(s) - {price_str}")
+        lines_html.append(
+            f"<li><span>{html.escape(title)}</span><br>"
+            f"<em>{html.escape(desc)}</em><br>"
+            f"<strong>{pts} story point(s) - {html.escape(price_str)}</strong></li>"
+        )
 
     total_str = brl_like_currency(total, CURRENCY_SYMBOL)
 
@@ -282,39 +260,14 @@ def main():
     if not APP_ID:
         raise RuntimeError("Missing MENDIX_APP_ID (your Mendix app/project ID).")
 
-    print("Fetching statuses...")
-    statuses_by_id = fetch_statuses()
-    # Also build a quick lookup by name for convenience
-    status_name_map = { (v.get("name") or v.get("displayName") or "").strip().lower(): k
-                        for k, v in statuses_by_id.items() if (v.get("name") or v.get("displayName")) }
-
-    print("Determining which statuses are completed...")
-    completed_ids = set()
-    for sid, sobj in statuses_by_id.items():
-        if is_completed_status(sobj):
-            completed_ids.add(sid)
-
-    if not completed_ids and COMPLETED_STATUS_NAMES:
-        # Fallback: map names to IDs directly if possible
-        for nm in COMPLETED_STATUS_NAMES:
-            sid = status_name_map.get(nm.strip().lower())
-            if sid:
-                completed_ids.add(sid)
-
-    if not completed_ids:
-        print("WARNING: No completed statuses identified with current configuration.")
-        print("Hint: set COMPLETED_STATUS_NAMES env var, e.g. 'Done,Completed,Accepted'")
-        # proceed but expect zero matches
-
     print("Fetching stories...")
     stories = iterate_all_stories()
     print(f"Total stories fetched: {len(stories)}")
 
     completed_stories = []
     for st in stories:
-        st_status_id = extract_status_id(st)
-        st_status_obj = statuses_by_id.get(st_status_id, {})
-        if (st_status_id and st_status_id in completed_ids) or is_completed_status(st_status_obj):
+        status = extract_status(st)
+        if status.lower() == "done":
             completed_stories.append(st)
 
     print(f"Completed stories found: {len(completed_stories)}")
