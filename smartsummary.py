@@ -199,11 +199,11 @@ def build_email_lines(completed_stories: List[Dict[str, Any]]) -> (str, str, flo
         total += price
 
         price_str = brl_like_currency(price, CURRENCY_SYMBOL)
-        lines_txt.append(f"- {title}\n  {desc}\n  {pts} story point(s) - {price_str}")
+        lines_txt.append(f"- {title} {desc} - {price_str}")
         lines_html.append(
             f"<li><span>{html.escape(title)}</span><br>"
-            f"<em>{html.escape(desc)}</em><br>"
-            f"<strong>{pts} story point(s) - {html.escape(price_str)}</strong></li>"
+            f"<em>{html.escape(desc)}</em>"
+            f"<strong> - {html.escape(price_str)}</strong></li>"
         )
 
     total_str = brl_like_currency(total, CURRENCY_SYMBOL)
