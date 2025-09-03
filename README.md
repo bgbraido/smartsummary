@@ -12,10 +12,10 @@ Create a file named `.env` in the same directory as the script and add:
 # ---- Mendix Epics API ----
 MENDIX_PAT=your_mendix_pat_here
 MENDIX_APP_ID=your-app-uuid-here
-EPICS_API_BASE=https://epics.api.mendix.com
+EPICS_API_BASE=https://epics.api.mendix.com/v1
 
 # Completed statuses (comma-separated)
-COMPLETED_STATUS_NAMES=Done,Completed,Accepted,Closed,Resolved
+COMPLETED_STATUS_NAMES=Done
 
 # ---- Pricing ----
 PRICE_PER_POINT=55.00
