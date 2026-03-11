@@ -152,6 +152,12 @@ def extract_status(story: Dict[str, Any]) -> str:
     """
     return str(story.get("status", "")).strip()
 
+def extract_story_id(story: Dict[str, Any]) -> str:
+    """
+    Extract story ID using OpenAPI spec key.
+    """
+    return str(story.get("storyId", "")).strip()
+
 def iterate_all_stories() -> List[Dict[str, Any]]:
     """
     Pull stories with naive pagination.
@@ -192,6 +198,7 @@ def build_email_lines(completed_stories: List[Dict[str, Any]]) -> (str, str, flo
 
     total = 0.0
     for st in completed_stories:
+        story_id = extract_story_id(st)
         title = extract_title(st)
         desc = extract_description(st)
         pts = extract_points(st)
@@ -199,7 +206,7 @@ def build_email_lines(completed_stories: List[Dict[str, Any]]) -> (str, str, flo
         total += price
 
         price_str = brl_like_currency(price, CURRENCY_SYMBOL)
-        lines_txt.append(f"- {title} {desc} - {price_str}")
+        lines_txt.append(f"- [{story_id}] {title} {desc} - {price_str}")
         lines_html.append(
             f"<li><span>{html.escape(title)}</span><br>"
             f"<em>{html.escape(desc)}</em>"
